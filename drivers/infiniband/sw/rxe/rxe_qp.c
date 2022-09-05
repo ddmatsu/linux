@@ -13,7 +13,7 @@
 #include "rxe.h"
 #include "rxe_loc.h"
 #include "rxe_queue.h"
-#include "rxe_task.h"
+#include "rxe_wq.h"
 
 static int rxe_qp_chk_cap(struct rxe_dev *rxe, struct ib_qp_cap *cap,
 			  int has_srq)
@@ -172,9 +172,9 @@ static void rxe_qp_init_misc(struct rxe_dev *rxe, struct rxe_qp *qp,
 
 	spin_lock_init(&qp->state_lock);
 
-	spin_lock_init(&qp->req.task.state_lock);
-	spin_lock_init(&qp->resp.task.state_lock);
-	spin_lock_init(&qp->comp.task.state_lock);
+	spin_lock_init(&qp->req.work.state_lock);
+	spin_lock_init(&qp->resp.work.state_lock);
+	spin_lock_init(&qp->comp.work.state_lock);
 
 	spin_lock_init(&qp->sq.sq_lock);
 	spin_lock_init(&qp->rq.producer_lock);
@@ -242,10 +242,10 @@ static int rxe_qp_init_req(struct rxe_dev *rxe, struct rxe_qp *qp,
 
 	skb_queue_head_init(&qp->req_pkts);
 
-	rxe_init_task(&qp->req.task, qp,
-		      rxe_requester, "req");
-	rxe_init_task(&qp->comp.task, qp,
-		      rxe_completer, "comp");
+	rxe_init_work(&qp->req.work, qp,
+		      rxe_requester, "rxe_req");
+	rxe_init_work(&qp->comp.work, qp,
+		      rxe_completer, "rxe_comp");
 
 	qp->qp_timeout_jiffies = 0; /* Can't be set for UD/UC in modify_qp */
 	if (init->qp_type == IB_QPT_RC) {
@@ -292,8 +292,8 @@ static int rxe_qp_init_resp(struct rxe_dev *rxe, struct rxe_qp *qp,
 
 	skb_queue_head_init(&qp->resp_pkts);
 
-	rxe_init_task(&qp->resp.task, qp,
-		      rxe_responder, "resp");
+	rxe_init_work(&qp->resp.work, qp,
+		      rxe_responder, "rxe_resp");
 
 	qp->resp.opcode		= OPCODE_NONE;
 	qp->resp.msn		= 0;
@@ -480,14 +480,14 @@ err1:
 /* move the qp to the reset state */
 static void rxe_qp_reset(struct rxe_qp *qp)
 {
-	/* stop tasks from running */
-	rxe_disable_task(&qp->resp.task);
+	/* flush workqueue and stop works from running */
+	rxe_disable_work(&qp->resp.work);
 
 	/* stop request/comp */
 	if (qp->sq.queue) {
 		if (qp_type(qp) == IB_QPT_RC)
-			rxe_disable_task(&qp->comp.task);
-		rxe_disable_task(&qp->req.task);
+			rxe_disable_work(&qp->comp.work);
+		rxe_disable_work(&qp->req.work);
 	}
 
 	/* move qp to the reset state */
@@ -498,11 +498,11 @@ static void rxe_qp_reset(struct rxe_qp *qp)
 	/* let state machines reset themselves drain work and packet queues
 	 * etc.
 	 */
-	__rxe_do_task(&qp->resp.task);
+	__rxe_do_work(&qp->resp.work);
 
 	if (qp->sq.queue) {
-		__rxe_do_task(&qp->comp.task);
-		__rxe_do_task(&qp->req.task);
+		__rxe_do_work(&qp->comp.work);
+		__rxe_do_work(&qp->req.work);
 		rxe_queue_reset(qp->sq.queue);
 	}
 
@@ -525,14 +525,14 @@ static void rxe_qp_reset(struct rxe_qp *qp)
 
 	cleanup_rd_atomic_resources(qp);
 
-	/* reenable tasks */
-	rxe_enable_task(&qp->resp.task);
+	/* reenable workqueue */
+	rxe_enable_work(&qp->resp.work);
 
 	if (qp->sq.queue) {
 		if (qp_type(qp) == IB_QPT_RC)
-			rxe_enable_task(&qp->comp.task);
+			rxe_enable_work(&qp->comp.work);
 
-		rxe_enable_task(&qp->req.task);
+		rxe_enable_work(&qp->req.work);
 	}
 }
 
@@ -543,10 +543,10 @@ static void rxe_qp_drain(struct rxe_qp *qp)
 		if (qp->req.state != QP_STATE_DRAINED) {
 			qp->req.state = QP_STATE_DRAIN;
 			if (qp_type(qp) == IB_QPT_RC)
-				rxe_run_task(&qp->comp.task, 1);
+				rxe_run_work(&qp->comp.work, 1);
 			else
-				__rxe_do_task(&qp->comp.task);
-			rxe_run_task(&qp->req.task, 1);
+				__rxe_do_work(&qp->comp.work);
+			rxe_run_work(&qp->req.work, 1);
 		}
 	}
 }
@@ -560,13 +560,13 @@ void rxe_qp_error(struct rxe_qp *qp)
 	qp->attr.qp_state = IB_QPS_ERR;
 
 	/* drain work and packet queues */
-	rxe_run_task(&qp->resp.task, 1);
+	rxe_run_work(&qp->resp.work, 1);
 
 	if (qp_type(qp) == IB_QPT_RC)
-		rxe_run_task(&qp->comp.task, 1);
+		rxe_run_work(&qp->comp.work, 1);
 	else
-		__rxe_do_task(&qp->comp.task);
-	rxe_run_task(&qp->req.task, 1);
+		__rxe_do_work(&qp->comp.work);
+	rxe_run_work(&qp->req.work, 1);
 }
 
 /* called by the modify qp verb */
@@ -785,23 +785,24 @@ static void rxe_qp_do_cleanup(struct work_struct *work)
 
 	qp->valid = 0;
 	qp->qp_timeout_jiffies = 0;
-	rxe_cleanup_task(&qp->resp.task);
+	rxe_cleanup_work(&qp->resp.work);
 
 	if (qp_type(qp) == IB_QPT_RC) {
 		del_timer_sync(&qp->retrans_timer);
 		del_timer_sync(&qp->rnr_nak_timer);
 	}
 
-	rxe_cleanup_task(&qp->req.task);
-	rxe_cleanup_task(&qp->comp.task);
+	rxe_cleanup_work(&qp->req.work);
+	rxe_cleanup_work(&qp->comp.work);
 
 	/* flush out any receive wr's or pending requests */
-	if (qp->req.task.func)
-		__rxe_do_task(&qp->req.task);
+
+	if (qp->req.work.func)
+		__rxe_do_work(&qp->req.work);
 
 	if (qp->sq.queue) {
-		__rxe_do_task(&qp->comp.task);
-		__rxe_do_task(&qp->req.task);
+		__rxe_do_work(&qp->comp.work);
+		__rxe_do_work(&qp->req.work);
 	}
 
 	if (qp->sq.queue)

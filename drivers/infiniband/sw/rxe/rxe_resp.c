@@ -81,17 +81,17 @@ static char *resp_state_name[] = {
 };
 
 /* rxe_recv calls here to add a request packet to the input queue */
-void rxe_resp_queue_pkt(struct rxe_qp *qp, struct sk_buff *skb)
+void rxe_resp_queue_pkt(struct rxe_pkt_info *pkt, struct sk_buff *skb)
 {
-	int must_sched;
-	struct rxe_pkt_info *pkt = SKB_TO_PKT(skb);
+	int sched = 1;
 
-	skb_queue_tail(&qp->req_pkts, skb);
-
-	must_sched = (pkt->opcode == IB_OPCODE_RC_RDMA_READ_REQUEST) ||
-			(skb_queue_len(&qp->req_pkts) > 1);
-
-	rxe_run_task(&qp->resp.task, must_sched);
+	/* responder can sleep to access ODP-enabled MRs, Always schedule
+	 * work items for non-zero-byte operations.
+	 */
+	if (unlikely(payload_size(pkt) == 0))
+		sched = 0;
+	skb_queue_tail(&pkt->qp->req_pkts, skb);
+	rxe_run_work(&pkt->qp->resp.work, sched);
 }
 
 static inline enum resp_states get_req(struct rxe_qp *qp,
@@ -1454,8 +1454,8 @@ int rxe_responder(void *arg)
 		}
 	}
 
-	/* A non-zero return value will cause rxe_do_task to
-	 * exit its loop and end the tasklet. A zero return
+	/* A non-zero return value will cause rxe_do_work to
+	 * exit its loop and end the work. A zero return
 	 * will continue looping and return to rxe_responder
 	 */
 done:
