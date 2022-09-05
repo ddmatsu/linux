@@ -328,8 +328,8 @@ static int ib_umem_odp_map_dma_single_page(
  *
  * Maps the range passed in the argument to DMA addresses.
  * The DMA addresses of the mapped pages is updated in umem_odp->dma_list.
- * Upon success the ODP MR will be locked to let caller complete its device
- * page table update.
+ * The umem mutex is locked in this function. Callers are responsible for
+ * releasing the lock.
  *
  * Returns the number of pages mapped in success, negative error code
  * for failure.
@@ -453,11 +453,9 @@ retry:
 			break;
 		}
 	}
-	/* upon success lock should stay on hold for the callee */
+
 	if (!ret)
 		ret = dma_index - start_idx;
-	else
-		mutex_unlock(&umem_odp->umem_mutex);
 
 out_put_mm:
 	mmput_async(owning_mm);
