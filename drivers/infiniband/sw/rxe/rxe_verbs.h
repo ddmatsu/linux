@@ -324,6 +324,8 @@ struct rxe_mr {
 	atomic_t		num_mw;
 
 	struct rxe_map		**map;
+
+	bool		        odp_enabled;
 };
 
 enum rxe_mw_state {
