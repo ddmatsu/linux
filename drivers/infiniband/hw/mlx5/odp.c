@@ -572,8 +572,10 @@ static int pagefault_real_mr(struct mlx5_ib_mr *mr, struct ib_umem_odp *odp,
 		access_mask |= ODP_WRITE_ALLOWED_BIT;
 
 	np = ib_umem_odp_map_dma_and_lock(odp, user_va, bcnt, access_mask, fault);
-	if (np < 0)
+	if (np < 0) {
+		mutex_unlock(&odp->umem_mutex);
 		return np;
+	}
 
 	/*
 	 * No need to check whether the MTTs really belong to this MR, since
