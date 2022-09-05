@@ -7,6 +7,8 @@
 #ifndef RXE_LOC_H
 #define RXE_LOC_H
 
+#include "rxe_resp.h"
+
 /* rxe_av.c */
 void rxe_init_av(struct rdma_ah_attr *attr, struct rxe_av *av);
 int rxe_av_chk_attr(struct rxe_qp *qp, struct rdma_ah_attr *attr);
@@ -192,6 +194,8 @@ int rxe_create_user_odp_mr(struct ib_pd *pd, u64 start, u64 length, u64 iova,
 			   int access_flags, struct rxe_mr *mr);
 int rxe_odp_mr_copy(struct rxe_mr *mr, u64 iova, void *addr, int length,
 		    enum rxe_mr_copy_dir dir);
+enum resp_states rxe_odp_atomic_ops(struct rxe_qp *qp, struct rxe_pkt_info *pkt,
+				    struct rxe_mr *mr);
 
 #else /* CONFIG_INFINIBAND_ON_DEMAND_PAGING */
 static inline int
@@ -203,6 +207,13 @@ rxe_create_user_odp_mr(struct ib_pd *pd, u64 start, u64 length, u64 iova,
 static inline int
 rxe_odp_mr_copy(struct rxe_mr *mr, u64 iova, void *addr,
 		int length, enum rxe_mr_copy_dir dir) { return 0; }
+
+static inline enum resp_states
+rxe_odp_atomic_ops(struct rxe_qp *qp, struct rxe_pkt_info *pkt,
+		   struct rxe_mr *mr)
+{
+	return RESPST_ERR_UNSUPPORTED_OPCODE;
+}
 
 #endif /* CONFIG_INFINIBAND_ON_DEMAND_PAGING */
 
