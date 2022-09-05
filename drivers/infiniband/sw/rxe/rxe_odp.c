@@ -3,9 +3,12 @@
  * Copyright (c) 2022 Fujitsu Ltd. All rights reserved.
  */
 
+#include <linux/hmm.h>
+
 #include <rdma/ib_umem_odp.h>
 
 #include "rxe.h"
+#include "rxe_resp.h"
 
 static bool rxe_ib_invalidate_range(struct mmu_interval_notifier *mni,
 				    const struct mmu_notifier_range *range,
@@ -112,6 +115,179 @@ int rxe_create_user_odp_mr(struct ib_pd *pd, u64 start, u64 length, u64 iova,
 	mr->ibmr.type = IB_MR_TYPE_USER;
 
 	err = rxe_init_odp_mr(mr);
+
+	return err;
+}
+
+static inline bool rxe_is_pagefault_neccesary(struct ib_umem_odp *umem_odp,
+					      u64 iova, int length, u32 perm)
+{
+	int idx;
+	u64 addr;
+	bool need_fault = false;
+
+	addr = iova & (~(BIT(umem_odp->page_shift) - 1));
+
+	/* Skim through all pages that are to be accessed. */
+	while (addr < iova + length) {
+		idx = (addr - ib_umem_start(umem_odp)) >> umem_odp->page_shift;
+
+		if (!(umem_odp->dma_list[idx] & perm)) {
+			need_fault = true;
+			break;
+		}
+
+		addr += BIT(umem_odp->page_shift);
+	}
+	return need_fault;
+}
+
+/* umem mutex must be locked before entering this function. */
+static int rxe_odp_map_range(struct rxe_mr *mr, u64 iova, int length, u32 flags)
+{
+	struct ib_umem_odp *umem_odp = to_ib_umem_odp(mr->umem);
+	const int max_tries = 3;
+	int cnt = 0;
+
+	int err;
+	u64 perm;
+	bool need_fault;
+
+	if (unlikely(length < 1)) {
+		mutex_unlock(&umem_odp->umem_mutex);
+		return -EINVAL;
+	}
+
+	perm = ODP_READ_ALLOWED_BIT;
+	if (!(flags & RXE_PAGEFAULT_RDONLY))
+		perm |= ODP_WRITE_ALLOWED_BIT;
+
+	/*
+	 * A successful return from rxe_odp_do_pagefault() does not guarantee
+	 * that all pages in the range became present. Recheck the DMA address
+	 * array, allowing max 3 tries for pagefault.
+	 */
+	while ((need_fault = rxe_is_pagefault_neccesary(umem_odp,
+							iova, length, perm))) {
+
+		if (cnt >= max_tries)
+			break;
+
+		mutex_unlock(&umem_odp->umem_mutex);
+
+		/* umem_mutex is locked on success. */
+		err = rxe_odp_do_pagefault(mr, iova, length, flags);
+		if (err < 0)
+			return err;
+
+		cnt++;
+	}
+
+	if (need_fault)
+		return -EFAULT;
+
+	return 0;
+}
+
+static inline void *rxe_odp_get_virt(struct ib_umem_odp *umem_odp, int umem_idx,
+				     size_t offset)
+{
+	struct page *page;
+	void *virt;
+
+	/*
+	 * Step 1. Get page struct from the pfn array.
+	 * Step 2. Convert page struct to kernel logical address.
+	 * Step 3. Add offset in the page to the address.
+	 */
+	page = hmm_pfn_to_page(umem_odp->pfn_list[umem_idx]);
+	virt = page_address(page);
+
+	if (!virt)
+		return NULL;
+
+	virt += offset;
+
+	return virt;
+}
+
+static int __rxe_odp_mr_copy(struct rxe_mr *mr, u64 iova, void *addr,
+			     int length, enum rxe_mr_copy_dir dir)
+{
+	struct ib_umem_odp *umem_odp = to_ib_umem_odp(mr->umem);
+
+	int idx, bytes;
+	u8 *user_va;
+	size_t offset;
+
+	idx = (iova - ib_umem_start(umem_odp)) >> umem_odp->page_shift;
+	offset = iova & (BIT(umem_odp->page_shift) - 1);
+
+	while (length > 0) {
+		u8 *src, *dest;
+
+		user_va = (u8 *)rxe_odp_get_virt(umem_odp, idx, offset);
+		if (!user_va)
+			return -EFAULT;
+
+		src = (dir == RXE_TO_MR_OBJ) ? addr : user_va;
+		dest = (dir == RXE_TO_MR_OBJ) ? user_va : addr;
+
+		bytes = BIT(umem_odp->page_shift) - offset;
+
+		if (bytes > length)
+			bytes = length;
+
+		memcpy(dest, src, bytes);
+
+		length  -= bytes;
+		idx++;
+		offset = 0;
+	}
+
+	return 0;
+}
+
+int rxe_odp_mr_copy(struct rxe_mr *mr, u64 iova, void *addr, int length,
+		    enum rxe_mr_copy_dir dir)
+{
+	struct ib_umem_odp *umem_odp = to_ib_umem_odp(mr->umem);
+	u32 flags = 0;
+
+	int err;
+
+	if (length == 0)
+		return 0;
+
+	if (unlikely(!mr->odp_enabled))
+		return -EOPNOTSUPP;
+
+	switch (dir) {
+	case RXE_TO_MR_OBJ:
+		break;
+
+	case RXE_FROM_MR_OBJ:
+		flags = RXE_PAGEFAULT_RDONLY;
+		break;
+
+	default:
+		return -EINVAL;
+	}
+
+	/* If pagefault is not required, umem mutex will be held until data
+	 * copy to the MR completes. Otherwise, it is released and locked
+	 * again in rxe_odp_map_range() to let invalidation handler do its
+	 * work meanwhile.
+	 */
+	mutex_lock(&umem_odp->umem_mutex);
+
+	err = rxe_odp_map_range(mr, iova, length, flags);
+	if (err)
+		return err;
+
+	err =  __rxe_odp_mr_copy(mr, iova, addr, length, dir);
+
+	mutex_unlock(&umem_odp->umem_mutex);
 
 	return err;
 }

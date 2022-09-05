@@ -11,43 +11,6 @@
 #include "rxe_queue.h"
 #include "rxe_resp.h"
 
-enum resp_states {
-	RESPST_NONE,
-	RESPST_GET_REQ,
-	RESPST_CHK_PSN,
-	RESPST_CHK_OP_SEQ,
-	RESPST_CHK_OP_VALID,
-	RESPST_CHK_RESOURCE,
-	RESPST_CHK_LENGTH,
-	RESPST_CHK_RKEY,
-	RESPST_EXECUTE,
-	RESPST_READ_REPLY,
-	RESPST_ATOMIC_REPLY,
-	RESPST_ATOMIC_WRITE_REPLY,
-	RESPST_PROCESS_FLUSH,
-	RESPST_COMPLETE,
-	RESPST_ACKNOWLEDGE,
-	RESPST_CLEANUP,
-	RESPST_DUPLICATE_REQUEST,
-	RESPST_ERR_MALFORMED_WQE,
-	RESPST_ERR_UNSUPPORTED_OPCODE,
-	RESPST_ERR_MISALIGNED_ATOMIC,
-	RESPST_ERR_PSN_OUT_OF_SEQ,
-	RESPST_ERR_MISSING_OPCODE_FIRST,
-	RESPST_ERR_MISSING_OPCODE_LAST_C,
-	RESPST_ERR_MISSING_OPCODE_LAST_D1E,
-	RESPST_ERR_TOO_MANY_RDMA_ATM_REQ,
-	RESPST_ERR_RNR,
-	RESPST_ERR_RKEY_VIOLATION,
-	RESPST_ERR_INVALIDATE_RKEY,
-	RESPST_ERR_LENGTH,
-	RESPST_ERR_CQ_OVERFLOW,
-	RESPST_ERROR,
-	RESPST_RESET,
-	RESPST_DONE,
-	RESPST_EXIT,
-};
-
 static char *resp_state_name[] = {
 	[RESPST_NONE]				= "NONE",
 	[RESPST_GET_REQ]			= "GET_REQ",
@@ -632,7 +595,8 @@ static enum resp_states write_data_in(struct rxe_qp *qp,
 		goto out;
 
 	if (qp->resp.mr->odp_enabled)
-		err = RESPST_ERR_UNSUPPORTED_OPCODE;
+		err = rxe_odp_mr_copy(qp->resp.mr, qp->resp.va + qp->resp.offset,
+				      payload_addr(pkt), data_len, RXE_TO_MR_OBJ);
 	else
 		err = rxe_mr_copy(qp->resp.mr, qp->resp.va + qp->resp.offset,
 				  payload_addr(pkt), data_len, RXE_TO_MR_OBJ);
@@ -1051,7 +1015,8 @@ static enum resp_states read_reply(struct rxe_qp *qp,
 
 	/* mr is NULL for a zero byte operation. */
 	if ((res->read.resid != 0) && mr->odp_enabled)
-		err = RESPST_ERR_UNSUPPORTED_OPCODE;
+		err = rxe_odp_mr_copy(mr, res->read.va, payload_addr(&ack_pkt),
+				      payload, RXE_FROM_MR_OBJ);
 	else
 		err = rxe_mr_copy(mr, res->read.va, payload_addr(&ack_pkt),
 				  payload, RXE_FROM_MR_OBJ);

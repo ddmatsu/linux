@@ -190,6 +190,8 @@ static inline unsigned int wr_opcode_mask(int opcode, struct rxe_qp *qp)
 /* rxe_odp.c */
 int rxe_create_user_odp_mr(struct ib_pd *pd, u64 start, u64 length, u64 iova,
 			   int access_flags, struct rxe_mr *mr);
+int rxe_odp_mr_copy(struct rxe_mr *mr, u64 iova, void *addr, int length,
+		    enum rxe_mr_copy_dir dir);
 
 #else /* CONFIG_INFINIBAND_ON_DEMAND_PAGING */
 static inline int
@@ -198,6 +200,9 @@ rxe_create_user_odp_mr(struct ib_pd *pd, u64 start, u64 length, u64 iova,
 {
 	return -EOPNOTSUPP;
 }
+static inline int
+rxe_odp_mr_copy(struct rxe_mr *mr, u64 iova, void *addr,
+		int length, enum rxe_mr_copy_dir dir) { return 0; }
 
 #endif /* CONFIG_INFINIBAND_ON_DEMAND_PAGING */
 

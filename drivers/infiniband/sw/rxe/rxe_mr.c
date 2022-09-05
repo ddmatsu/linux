@@ -479,7 +479,7 @@ int copy_data(
 			iova = sge->addr + offset;
 
 			if (mr->odp_enabled)
-				err = -EOPNOTSUPP;
+				err = rxe_odp_mr_copy(mr, iova, addr, bytes, dir);
 			else
 				err = rxe_mr_copy(mr, iova, addr, bytes, dir);
 			if (err)
