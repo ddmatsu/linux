@@ -10,7 +10,7 @@
 #include <linux/interrupt.h>
 #include <linux/workqueue.h>
 #include "rxe_pool.h"
-#include "rxe_task.h"
+#include "rxe_wq.h"
 #include "rxe_hw_counters.h"
 
 static inline int pkey_match(u16 key1, u16 key2)
@@ -125,7 +125,7 @@ struct rxe_req_info {
 	int			need_retry;
 	int			wait_for_rnr_timer;
 	int			noack_pkts;
-	struct rxe_task		task;
+	struct rxe_work		work;
 };
 
 struct rxe_comp_info {
@@ -137,7 +137,7 @@ struct rxe_comp_info {
 	int			started_retry;
 	u32			retry_cnt;
 	u32			rnr_retry;
-	struct rxe_task		task;
+	struct rxe_work		work;
 };
 
 enum rdatm_res_state {
@@ -204,7 +204,7 @@ struct rxe_resp_info {
 	unsigned int		res_head;
 	unsigned int		res_tail;
 	struct resp_res		*res;
-	struct rxe_task		task;
+	struct rxe_work		work;
 };
 
 struct rxe_qp {
