@@ -903,7 +903,12 @@ static struct ib_mr *rxe_reg_user_mr(struct ib_pd *ibpd,
 	mr->ibmr.pd = ibpd;
 	mr->ibmr.device = ibpd->device;
 
-	err = rxe_mr_init_user(rxe, start, length, iova, access, mr);
+	if (access & IB_ACCESS_ON_DEMAND)
+		err = rxe_create_user_odp_mr(&pd->ibpd, start, length, iova,
+					     access, mr);
+	else
+		err = rxe_mr_init_user(rxe, start, length, iova, access, mr);
+
 	if (err)
 		goto err1;
 

@@ -627,8 +627,16 @@ static enum resp_states write_data_in(struct rxe_qp *qp,
 	int	err;
 	int data_len = payload_size(pkt);
 
-	err = rxe_mr_copy(qp->resp.mr, qp->resp.va + qp->resp.offset,
-			  payload_addr(pkt), data_len, RXE_TO_MR_OBJ);
+	/* resp.mr is not set in check_rkey() for zero byte operations */
+	if (data_len == 0)
+		goto out;
+
+	if (qp->resp.mr->odp_enabled)
+		err = RESPST_ERR_UNSUPPORTED_OPCODE;
+	else
+		err = rxe_mr_copy(qp->resp.mr, qp->resp.va + qp->resp.offset,
+				  payload_addr(pkt), data_len, RXE_TO_MR_OBJ);
+
 	if (err) {
 		rc = RESPST_ERR_RKEY_VIOLATION;
 		goto out;
@@ -692,6 +700,9 @@ static enum resp_states process_flush(struct rxe_qp *qp,
 	u64 length, start;
 	struct rxe_mr *mr = qp->resp.mr;
 	struct resp_res *res = qp->resp.res;
+
+	if (mr->odp_enabled)
+		return RESPST_ERR_UNSUPPORTED_OPCODE;
 
 	/* oA19-14, oA19-15 */
 	if (res && res->replay)
@@ -807,7 +818,11 @@ static enum resp_states rxe_atomic_reply(struct rxe_qp *qp,
 	if (!res->replay) {
 		if (mr->state != RXE_MR_STATE_VALID)
 			return RESPST_ERR_RKEY_VIOLATION;
-		ret = rxe_atomic_ops(qp, pkt, mr);
+
+		if (mr->odp_enabled)
+			ret = RESPST_ERR_UNSUPPORTED_OPCODE;
+		else
+			ret = rxe_atomic_ops(qp, pkt, mr);
 	} else
 		ret = RESPST_ACKNOWLEDGE;
 
@@ -821,6 +836,9 @@ static enum resp_states do_atomic_write(struct rxe_qp *qp,
 	struct rxe_mr *mr = qp->resp.mr;
 	int payload = payload_size(pkt);
 	u64 src, *dst;
+
+	if (mr->odp_enabled)
+		return RESPST_ERR_UNSUPPORTED_OPCODE;
 
 	if (mr->state != RXE_MR_STATE_VALID)
 		return RESPST_ERR_RKEY_VIOLATION;
@@ -1031,8 +1049,13 @@ static enum resp_states read_reply(struct rxe_qp *qp,
 		return RESPST_ERR_RNR;
 	}
 
-	err = rxe_mr_copy(mr, res->read.va, payload_addr(&ack_pkt),
-			  payload, RXE_FROM_MR_OBJ);
+	/* mr is NULL for a zero byte operation. */
+	if ((res->read.resid != 0) && mr->odp_enabled)
+		err = RESPST_ERR_UNSUPPORTED_OPCODE;
+	else
+		err = rxe_mr_copy(mr, res->read.va, payload_addr(&ack_pkt),
+				  payload, RXE_FROM_MR_OBJ);
+
 	if (mr)
 		rxe_put(mr);
 	if (err) {
