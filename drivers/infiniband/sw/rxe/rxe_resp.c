@@ -536,7 +536,8 @@ static enum resp_states write_data_in(struct rxe_qp *qp,
 	int data_len = payload_size(pkt);
 
 	if (qp->resp.mr->odp_enabled)
-		err = -EOPNOTSUPP;
+		err = rxe_odp_mr_copy(qp->resp.mr, qp->resp.va + qp->resp.offset,
+				      payload_addr(pkt), data_len, RXE_TO_MR_OBJ);
 	else
 		err = rxe_mr_copy(qp->resp.mr, qp->resp.va + qp->resp.offset,
 				  payload_addr(pkt), data_len, RXE_TO_MR_OBJ);
@@ -839,7 +840,8 @@ static enum resp_states read_reply(struct rxe_qp *qp,
 		return RESPST_ERR_RNR;
 
 	if (mr->odp_enabled)
-		err = -EOPNOTSUPP;
+		err = rxe_odp_mr_copy(mr, res->read.va, payload_addr(&ack_pkt),
+				      payload, RXE_FROM_MR_OBJ);
 	else
 		err = rxe_mr_copy(mr, res->read.va, payload_addr(&ack_pkt),
 				  payload, RXE_FROM_MR_OBJ);
