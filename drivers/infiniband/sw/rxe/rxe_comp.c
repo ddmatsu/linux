@@ -126,13 +126,21 @@ void retransmit_timer(struct timer_list *t)
 	spin_unlock_bh(&qp->state_lock);
 }
 
-void rxe_comp_queue_pkt(struct rxe_qp *qp, struct sk_buff *skb)
+void rxe_comp_queue_pkt(struct rxe_pkt_info *pkt, struct sk_buff *skb)
 {
+	struct rxe_qp *qp = pkt->qp;
 	int must_sched;
 
 	skb_queue_tail(&qp->resp_pkts, skb);
 
-	must_sched = skb_queue_len(&qp->resp_pkts) > 1;
+	/* Schedule the task if processing Read responses or Atomic acks.
+	 * In these cases, completer may sleep to access ODP-enabled MRs.
+	 */
+	if (pkt->mask | (RXE_PAYLOAD_MASK || RXE_ATMACK_MASK))
+		must_sched = 1;
+	else
+		must_sched = skb_queue_len(&qp->resp_pkts) > 1;
+
 	if (must_sched != 0)
 		rxe_counter_inc(SKB_TO_PKT(skb)->rxe, RXE_CNT_COMPLETER_SCHED);
 
