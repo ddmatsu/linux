@@ -85,15 +85,20 @@ static char *resp_state_name[] = {
 };
 
 /* rxe_recv calls here to add a request packet to the input queue */
-void rxe_resp_queue_pkt(struct rxe_qp *qp, struct sk_buff *skb)
+void rxe_resp_queue_pkt(struct rxe_pkt_info *pkt, struct sk_buff *skb)
 {
-	int must_sched;
-	struct rxe_pkt_info *pkt = SKB_TO_PKT(skb);
+	int must_sched = 1;
+	struct rxe_qp *qp = pkt->qp;
 
 	skb_queue_tail(&qp->req_pkts, skb);
 
-	must_sched = (pkt->opcode == IB_OPCODE_RC_RDMA_READ_REQUEST) ||
-			(skb_queue_len(&qp->req_pkts) > 1);
+	/* responder can sleep to access an ODP-enabled MR. Always schedule
+	 * work items for non-zero-byte operations, RDMA READ, and ATOMIC
+	 * operations.
+	 */
+	if ((skb_queue_len(&qp->req_pkts) == 1) && (payload_size(pkt) == 0)
+	    && !(pkt->mask & RXE_READ_OR_ATOMIC_MASK))
+		must_sched = 0;
 
 	if (must_sched)
 		rxe_sched_task(&qp->resp.task);
