@@ -6,6 +6,22 @@
 
 #include "rxe.h"
 
+static struct workqueue_struct *rxe_wq;
+
+int rxe_alloc_wq(void)
+{
+	rxe_wq = alloc_workqueue("rxe_wq", WQ_CPU_INTENSIVE, WQ_MAX_ACTIVE);
+	if (!rxe_wq)
+		return -ENOMEM;
+
+	return 0;
+}
+
+void rxe_destroy_wq(void)
+{
+	destroy_workqueue(rxe_wq);
+}
+
 int __rxe_do_task(struct rxe_task *task)
 
 {
@@ -24,11 +40,11 @@ int __rxe_do_task(struct rxe_task *task)
  * a second caller finds the task already running
  * but looks just after the last call to func
  */
-static void do_task(struct tasklet_struct *t)
+static void do_task(struct work_struct *w)
 {
 	int cont;
 	int ret;
-	struct rxe_task *task = from_tasklet(task, t, tasklet);
+	struct rxe_task *task = container_of(w, typeof(*task), work);
 	struct rxe_qp *qp = (struct rxe_qp *)task->arg;
 	unsigned int iterations = RXE_MAX_ITERATIONS;
 
@@ -64,10 +80,10 @@ static void do_task(struct tasklet_struct *t)
 			} else if (iterations--) {
 				cont = 1;
 			} else {
-				/* reschedule the tasklet and exit
+				/* reschedule the work item and exit
 				 * the loop to give up the cpu
 				 */
-				tasklet_schedule(&task->tasklet);
+				queue_work(task->workq, &task->work);
 				task->state = TASK_STATE_START;
 			}
 			break;
@@ -97,7 +113,8 @@ int rxe_init_task(struct rxe_task *task, void *arg, int (*func)(void *))
 	task->func	= func;
 	task->destroyed	= false;
 
-	tasklet_setup(&task->tasklet, do_task);
+	INIT_WORK(&task->work, do_task);
+	task->workq = rxe_wq;
 
 	task->state = TASK_STATE_START;
 	spin_lock_init(&task->lock);
@@ -111,17 +128,16 @@ void rxe_cleanup_task(struct rxe_task *task)
 
 	/*
 	 * Mark the task, then wait for it to finish. It might be
-	 * running in a non-tasklet (direct call) context.
+	 * running in a non-workqueue (direct call) context.
 	 */
 	task->destroyed = true;
+	flush_workqueue(task->workq);
 
 	do {
 		spin_lock_bh(&task->lock);
 		idle = (task->state == TASK_STATE_START);
 		spin_unlock_bh(&task->lock);
 	} while (!idle);
-
-	tasklet_kill(&task->tasklet);
 }
 
 void rxe_run_task(struct rxe_task *task)
@@ -129,7 +145,7 @@ void rxe_run_task(struct rxe_task *task)
 	if (task->destroyed)
 		return;
 
-	do_task(&task->tasklet);
+	do_task(&task->work);
 }
 
 void rxe_sched_task(struct rxe_task *task)
@@ -137,15 +153,27 @@ void rxe_sched_task(struct rxe_task *task)
 	if (task->destroyed)
 		return;
 
-	tasklet_schedule(&task->tasklet);
+	/*
+	 * busy-loop while qp reset is in progress.
+	 * This may be called from softirq context and thus cannot sleep.
+	 */
+	while (atomic_read(&task->suspended))
+		cpu_relax();
+
+	queue_work(task->workq, &task->work);
 }
 
 void rxe_disable_task(struct rxe_task *task)
 {
-	tasklet_disable(&task->tasklet);
+	/* Alternative to tasklet_disable() */
+	atomic_inc(&task->suspended);
+	smp_mb__after_atomic();
+	flush_workqueue(task->workq);
 }
 
 void rxe_enable_task(struct rxe_task *task)
 {
-	tasklet_enable(&task->tasklet);
+	/* Alternative to tasklet_enable() */
+	smp_mb__before_atomic();
+	atomic_dec(&task->suspended);
 }

@@ -19,14 +19,21 @@ enum {
  * called again.
  */
 struct rxe_task {
-	struct tasklet_struct	tasklet;
+	struct workqueue_struct	*workq;
+	struct work_struct	work;
 	int			state;
 	spinlock_t		lock;
 	void			*arg;
 	int			(*func)(void *arg);
 	int			ret;
 	bool			destroyed;
+	/* used to {dis, en}able per-qp work items */
+	atomic_t		suspended;
 };
+
+int rxe_alloc_wq(void);
+
+void rxe_destroy_wq(void);
 
 /*
  * init rxe_task structure
@@ -40,18 +47,20 @@ void rxe_cleanup_task(struct rxe_task *task);
 
 /*
  * raw call to func in loop without any checking
- * can call when tasklets are disabled
+ * can call when tasks are suspended
  */
 int __rxe_do_task(struct rxe_task *task);
 
+/* run a task without scheduling */
 void rxe_run_task(struct rxe_task *task);
 
+/* schedule a task into workqueue */
 void rxe_sched_task(struct rxe_task *task);
 
 /* keep a task from scheduling */
 void rxe_disable_task(struct rxe_task *task);
 
-/* allow task to run */
+/* allow a task to run again */
 void rxe_enable_task(struct rxe_task *task);
 
 #endif /* RXE_TASK_H */

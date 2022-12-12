@@ -773,7 +773,7 @@ int rxe_completer(void *arg)
 	}
 
 	/* A non-zero return value will cause rxe_do_task to
-	 * exit its loop and end the tasklet. A zero return
+	 * exit its loop and end the work item. A zero return
 	 * will continue looping and return to rxe_completer
 	 */
 done:

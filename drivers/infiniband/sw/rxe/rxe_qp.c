@@ -471,7 +471,7 @@ err1:
 /* move the qp to the reset state */
 static void rxe_qp_reset(struct rxe_qp *qp)
 {
-	/* stop tasks from running */
+	/* flush workqueue and stop tasks from running */
 	rxe_disable_task(&qp->resp.task);
 
 	/* stop request/comp */

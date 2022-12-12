@@ -830,7 +830,7 @@ int rxe_requester(void *arg)
 	update_state(qp, &pkt);
 
 	/* A non-zero return value will cause rxe_do_task to
-	 * exit its loop and end the tasklet. A zero return
+	 * exit its loop and end the work item. A zero return
 	 * will continue looping and return to rxe_requester
 	 */
 done:
