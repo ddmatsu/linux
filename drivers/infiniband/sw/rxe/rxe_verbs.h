@@ -333,6 +333,8 @@ struct rxe_mr {
 	u32			nbuf;
 
 	struct xarray		page_list;
+
+	bool			odp_enabled;
 };
 
 static inline unsigned int mr_page_size(struct rxe_mr *mr)
