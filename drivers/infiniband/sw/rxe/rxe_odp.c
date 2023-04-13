@@ -283,3 +283,29 @@ int rxe_odp_mr_copy(struct rxe_mr *mr, u64 iova, void *addr, int length,
 
 	return err;
 }
+
+int rxe_odp_mr_atomic_op(struct rxe_mr *mr, u64 iova, int opcode,
+			 u64 compare, u64 swap_add, u64 *orig_val)
+{
+	int err;
+	struct ib_umem_odp *umem_odp = to_ib_umem_odp(mr->umem);
+
+	/* If pagefault is not required, umem mutex will be held until the
+	 * atomic operation completes. Otherwise, it is released and locked
+	 * again in rxe_odp_map_range() to let invalidation handler do its
+	 * work meanwhile.
+	 */
+	mutex_lock(&umem_odp->umem_mutex);
+
+	/* Atomic operations manipulate a single char. */
+	err = rxe_odp_map_range(mr, iova, sizeof(char), 0);
+	if (err)
+		return err;
+
+	err = rxe_mr_do_atomic_op(mr, iova, opcode, compare,
+				  swap_add, orig_val);
+
+	mutex_unlock(&umem_odp->umem_mutex);
+
+	return err;
+}
