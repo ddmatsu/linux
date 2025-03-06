@@ -649,10 +649,6 @@ static enum resp_states process_flush(struct rxe_qp *qp,
 	struct rxe_mr *mr = qp->resp.mr;
 	struct resp_res *res = qp->resp.res;
 
-	/* ODP is not supported right now. WIP. */
-	if (mr->umem->is_odp)
-		return RESPST_ERR_UNSUPPORTED_OPCODE;
-
 	/* oA19-14, oA19-15 */
 	if (res && res->replay)
 		return RESPST_ACKNOWLEDGE;
@@ -670,8 +666,13 @@ static enum resp_states process_flush(struct rxe_qp *qp,
 	}
 
 	if (res->flush.type & IB_FLUSH_PERSISTENT) {
-		if (rxe_flush_pmem_iova(mr, start, length))
-			return RESPST_ERR_RKEY_VIOLATION;
+		if (mr->umem->is_odp) {
+			if (rxe_odp_flush_pmem_iova(mr, start, length))
+				return RESPST_ERR_RKEY_VIOLATION;
+		} else {
+			if (rxe_flush_pmem_iova(mr, start, length))
+				return RESPST_ERR_RKEY_VIOLATION;
+		}
 		/* Make data persistent. */
 		wmb();
 	} else if (res->flush.type & IB_FLUSH_GLOBAL) {
